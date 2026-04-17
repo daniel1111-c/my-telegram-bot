@@ -1,113 +1,148 @@
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
+const Tesseract = require('tesseract.js');
 
 const token = "8210342975:AAElwI386CxD3OAbnyjEIVR0pK7OW8loR8U";
 const bot = new TelegramBot(token, { polling: true });
 
-// טעינת שמות מהקובץ
-let names = JSON.parse(fs.readFileSync('./names.json', 'utf8'));
+// 📅 תאריך של היום
+function getTodayDate() {
+  return new Date().toISOString().split('T')[0];
+}
 
-// נרמול טקסט (מוריד רווחים, מסדר ומסיר מקפים)
+// 📂 טעינת נתונים
+let data;
+try {
+  data = JSON.parse(fs.readFileSync('./names.json', 'utf8'));
+} catch {
+  data = { date: getTodayDate(), names: [] };
+}
+
+// 🔄 איפוס יומי
+if (data.date !== getTodayDate()) {
+  data = { date: getTodayDate(), names: [] };
+  fs.writeFileSync('./names.json', JSON.stringify(data, null, 2), 'utf8');
+}
+
+// 🧠 נרמול טקסט
 function normalize(str) {
   return str
     .trim()
-    .replace(/\s+/g, ' ')  // הופך רווחים מרובים לרווח אחד
-    .replace(/-/g, '')      // מסיר מקפים
-    .replace(/'/g, '')      // מתעלם מהסימן '
-    .toLowerCase();        // משנה לקטן
+    .replace(/\s+/g, ' ')
+    .replace(/-/g, '')
+    .replace(/'/g, '')
+    .toLowerCase();
 }
 
-// הופך סדר מילים (אופציה ל"שם הפוך")
+// 🔁 היפוך מילים
 function reverseWords(str) {
   return str.split(' ').reverse().join(' ');
 }
 
-// פונקציה לבדוק אם לפחות שתי מילים מהשם קיימות בחיפוש
+// 🔍 בדיקת התאמה
 function isMatch(input, name) {
   const normalizedInput = normalize(input);
   const normalizedName = normalize(name);
 
-  // אם השם ההפוך תואם
-  if (normalizedInput === normalizedName || normalizedInput === reverseWords(normalizedName)) {
+  if (
+    normalizedInput === normalizedName ||
+    normalizedInput === reverseWords(normalizedName)
+  ) {
     return true;
   }
 
-  // נוודא שיש לפחות 2 מילים תואמות
   const inputWords = normalizedInput.split(' ');
   const nameWords = normalizedName.split(' ');
 
   let matchingWords = 0;
-  inputWords.forEach(inputWord => {
-    if (nameWords.includes(inputWord)) {
-      matchingWords++;
-    }
+  inputWords.forEach(word => {
+    if (nameWords.includes(word)) matchingWords++;
   });
 
-  return matchingWords >= 2; // לפחות 2 מילים תואמות
+  return matchingWords >= 2;
 }
 
-// הודעות
+// 💾 שמירה
+function saveData() {
+  fs.writeFileSync('./names.json', JSON.stringify(data, null, 2), 'utf8');
+}
+
+// 📩 הודעות טקסט
 bot.on('message', (msg) => {
   const text = msg.text?.trim();
   if (!text) return;
 
-  // הודעה ל-`CMD` בהצלחה
   console.log("התחבר בהצלחה לטלגרם");
 
-  // 📌 הצגת כל הרשימה
+  // 📌 הצגת רשימה
   if (text === "הצג רשימה") {
-    // חיתוך הרשימה לחלקים קטנים יותר
-    const chunkSize = 4096; // המגבלה של טלגרם להודעה
-    let chunk = '';
-    let counter = 0;
-
-    names.forEach((name, index) => {
-      if (counter + name.length + 1 > chunkSize) {
-        bot.sendMessage(msg.chat.id, chunk);
-        chunk = name + '\n'; // התחלת חלק חדש
-        counter = name.length + 1;
-      } else {
-        chunk += name + '\n';
-        counter += name.length + 1;
-      }
-
-      if (index === names.length - 1 && chunk) {
-        bot.sendMessage(msg.chat.id, chunk); // שליחת החלק האחרון
-      }
-    });
-    return;
+    const list = data.names.join('\n') || "אין נתונים היום";
+    return bot.sendMessage(msg.chat.id, list);
   }
 
-  // 🚀 הוספת שם חדש
-  if (text.startsWith("הוסף ")) {
-    const nameToAdd = text.slice(5).trim();
-    if (nameToAdd && !names.includes(nameToAdd)) {
-      names.push(nameToAdd);
-      fs.writeFileSync('./names.json', JSON.stringify(names, null, 2), 'utf8');
-      return bot.sendMessage(msg.chat.id, `✔ שם נוסף בהצלחה: ${nameToAdd}`);
-    } else {
-      return bot.sendMessage(msg.chat.id, `✖ השם כבר קיים או לא תקין`);
-    }
+  const normalizedText = normalize(text);
+
+  // ❌ כפילות יומית
+  if (data.names.includes(normalizedText)) {
+    return bot.sendMessage(msg.chat.id, "⚠ השם כבר נבדק היום");
   }
 
-  // ❌ הסרת שם
-  if (text.startsWith("הסר ")) {
-    const nameToRemove = text.slice(4).trim();
-    if (nameToRemove && names.includes(nameToRemove)) {
-      names = names.filter(name => name !== nameToRemove);
-      fs.writeFileSync('./names.json', JSON.stringify(names, null, 2), 'utf8');
-      return bot.sendMessage(msg.chat.id, `✔ שם הוסר בהצלחה: ${nameToRemove}`);
-    } else {
-      return bot.sendMessage(msg.chat.id, `✖ השם לא נמצא ברשימה`);
-    }
-  }
+  // 💾 שמירה
+  data.names.push(normalizedText);
+  saveData();
 
-  // בדיקת שם
-  const found = names.find(name => isMatch(text, name));
+  // 🔍 חיפוש
+  const found = data.names.find(name => isMatch(text, name));
 
   if (found) {
     bot.sendMessage(msg.chat.id, `✔ נמצא: ${found}`);
   } else {
     bot.sendMessage(msg.chat.id, `✖ לא נמצא ברשימה`);
+  }
+});
+
+// 🖼️ קבלת תמונה (OCR)
+bot.on('photo', async (msg) => {
+  try {
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    const file = await bot.getFile(fileId);
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+
+    const result = await Tesseract.recognize(fileUrl, 'heb+eng');
+    const rawText = result.data.text.trim();
+
+    if (!rawText) {
+      return bot.sendMessage(msg.chat.id, "❌ לא זוהה טקסט בתמונה");
+    }
+
+    // ✂️ לוקח רק שורה ראשונה
+    const extractedText = rawText.split('\n')[0].trim();
+
+    // 📢 מציג מה נמצא בתמונה
+    await bot.sendMessage(msg.chat.id, `📸 נמצא בתמונה: ${extractedText}`);
+
+    const normalizedText = normalize(extractedText);
+
+    // ❌ כפילות יומית
+    if (data.names.includes(normalizedText)) {
+      return bot.sendMessage(msg.chat.id, "⚠ השם כבר נבדק היום");
+    }
+
+    // 💾 שמירה
+    data.names.push(normalizedText);
+    saveData();
+
+    // 🔍 חיפוש
+    const found = data.names.find(name => isMatch(extractedText, name));
+
+    if (found) {
+      bot.sendMessage(msg.chat.id, `✔ נמצא ברשימה: ${found}`);
+    } else {
+      bot.sendMessage(msg.chat.id, `✖ לא נמצא ברשימה`);
+    }
+
+  } catch (err) {
+    console.error(err);
+    bot.sendMessage(msg.chat.id, "❌ שגיאה בקריאת התמונה");
   }
 });
